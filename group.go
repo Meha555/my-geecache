@@ -2,6 +2,7 @@ package geecache
 
 import (
 	"fmt"
+	pb "geecache/proto"
 	"geecache/singleflight"
 	"geecache/util"
 	"sync"
@@ -96,14 +97,17 @@ func (g *Group) getFromPeer(key string) (util.ByteView, error) {
 	if peer == nil {
 		return util.ByteView{}, fmt.Errorf("no peer for key: %s", key)
 	}
-	bytes, err := peer.Get(g.name, key)
+	var resp pb.Response
+	err := peer.Get(&pb.Request{
+		Group: g.name,
+		Key:   key,
+	}, &resp)
 	if err != nil {
 		return util.ByteView{}, err
 	}
-	value := util.ByteView{B: util.CloneBytes(bytes)} // 这里bytes是切片，所以不会深拷贝，所以这里手动深拷贝来防止底层数据源修改了数据导致util.ByteView中持有的数据也被修改
 	// 对于远程节点，不应该更新其远程缓存。因为分布式缓存的目的是不同key缓存在不同的节点上，增加总的吞吐量。如果大家转发请求后，都再备份一次，每台机器上都缓存了相同的数据，就失去意义了。每个节点缓存1G数据，理论上10个节点总共可以缓存10G不同的数据。
 	// 当然对于热点数据，每个节点拿到值后，本机备份一次是有价值的，增加热点数据的吞吐量。groupcache 的原生实现中，有1/10的概率会在本机存一次。这样10个节点，理论上可以缓存9G不同的数据，算是一种取舍。
-	return value, err
+	return util.ByteView{B: util.CloneBytes(resp.Value)}, err // 这里bytes是切片，所以不会深拷贝，所以这里手动深拷贝来防止底层数据源修改了数据导致util.ByteView中持有的数据也被修改
 }
 
 // 更新本地缓存

@@ -4,11 +4,15 @@ import (
 	"fmt"
 	"geecache"
 	"geecache/consistenthash"
+	pb "geecache/proto"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -66,7 +70,9 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/octet-stream") // 表明是二进制流
-	w.Write(value.ByteSlice())                                 // 这里可以用 w.Write(view.b) 代替，写入 http body 不会影响 cache 的值
+	// 用 protobuf 的目的非常简单，为了获得更高的性能。传输前使用 protobuf 编码，接收方再进行解码，可以显著地降低二进制传输的大小。另外一方面，protobuf 可非常适合传输结构化数据，便于通信字段的扩展。
+	body, err := proto.Marshal(&pb.Response{Value: value.ByteSlice()})
+	w.Write(body) // 这里可以用 w.Write(view.b) 代替，写入 http body 不会影响 cache 的值
 }
 
 func (p *HTTPPool) AddPeers(peers ...consistenthash.NodeID) {
@@ -111,25 +117,27 @@ type httpGetter struct {
 	remoteURL string
 }
 
-func (g *httpGetter) Get(group string, key string) ([]byte, error) {
-	url, err := url.JoinPath(g.remoteURL, url.QueryEscape(group), url.QueryEscape(key))
+func (g *httpGetter) Get(in *pb.Request, out *pb.Response) error {
+	url, err := url.JoinPath(g.remoteURL, url.QueryEscape(in.GetGroup()), url.QueryEscape(in.GetKey()))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	resp, err := http.Get(url)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("server returned: %v", resp.Status)
+		return fmt.Errorf("server returned: %v", resp.Status)
 	}
 
-	var nodeId []byte
-	_, err = resp.Body.Read(nodeId)
+	bytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading response body: %v", err)
+		return fmt.Errorf("reading response body: %v", err)
 	}
-	return nodeId, nil
+	if err := proto.Unmarshal(bytes, out); err != nil {
+		return fmt.Errorf("decoding response body: %v", err)
+	}
+	return nil
 }
