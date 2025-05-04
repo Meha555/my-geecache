@@ -8,10 +8,10 @@ type Value interface {
 	Size() int
 }
 
-type LRUCache struct {
+type Cache struct {
 	maxBytes  int64
 	nbytes    int64
-	ll        *list.List
+	ll        *list.List // 队头最新,队尾最旧
 	cache     map[string]*list.Element
 	OnEvicted func(key string, value Value)
 }
@@ -25,8 +25,8 @@ func (e *Entry) Size() int64 {
 	return int64(len(e.Key)) + int64(e.Value.Size())
 }
 
-func New(maxBytes int64, onEvicted func(key string, value Value)) *LRUCache {
-	return &LRUCache{
+func New(maxBytes int64, onEvicted func(key string, value Value)) *Cache {
+	return &Cache{
 		maxBytes:  maxBytes,
 		nbytes:    0,
 		ll:        list.New(),
@@ -35,11 +35,11 @@ func New(maxBytes int64, onEvicted func(key string, value Value)) *LRUCache {
 	}
 }
 
-func (l *LRUCache) touch(ele *list.Element) {
+func (l *Cache) touch(ele *list.Element) {
 	l.ll.MoveToFront(ele)
 }
 
-func (l *LRUCache) evict() {
+func (l *Cache) evict() {
 	val := l.ll.Remove(l.ll.Back())
 	kv := val.(*Entry)
 	delete(l.cache, kv.Key)
@@ -49,7 +49,7 @@ func (l *LRUCache) evict() {
 	}
 }
 
-func (l *LRUCache) Get(key string) (value Value, ok bool) {
+func (l *Cache) Get(key string) (value Value, ok bool) {
 	if ele, ok := l.cache[key]; ok {
 		l.touch(ele)
 		return ele.Value.(*Entry).Value, true
@@ -57,7 +57,7 @@ func (l *LRUCache) Get(key string) (value Value, ok bool) {
 	return nil, false
 }
 
-func (l *LRUCache) Put(key string, value Value) {
+func (l *Cache) Put(key string, value Value) {
 	if ele, ok := l.cache[key]; ok {
 		kv := ele.Value.(*Entry)
 		kv.Value = value
@@ -72,6 +72,6 @@ func (l *LRUCache) Put(key string, value Value) {
 	}
 }
 
-func (l *LRUCache) Len() int {
+func (l *Cache) Len() int {
 	return l.ll.Len()
 }

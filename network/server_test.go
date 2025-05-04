@@ -16,7 +16,7 @@ var db = map[string]string{
 	"Sam":  "567",
 }
 
-func TestHTTPPool(t *testing.T) {
+func TestCacheServer(t *testing.T) {
 	geecache.NewGroup("scores", 2<<10, geecache.GetterFunc(func(key string) ([]byte, error) {
 		log.Println("[SlowDB] search key", key)
 		if v, ok := db[key]; ok {
@@ -24,14 +24,14 @@ func TestHTTPPool(t *testing.T) {
 		}
 		return nil, fmt.Errorf("%v is not exist", key)
 	}))
-	pool := NewHTTPPool(":9999")
+	server := NewCacheServer(":9999")
 
 	t.Run("Test GET /scores/Tom", func(t *testing.T) {
-		url, _ := url.JoinPath(defaultBasePath, "/scores/Tom")
+		url, _ := url.JoinPath(server.basePath, "/scores/Tom")
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		recorder := httptest.NewRecorder()
 
-		pool.ServeHTTP(recorder, req)
+		server.ServeHTTP(recorder, req)
 
 		if recorder.Code != http.StatusOK {
 			t.Errorf("Expected status code %d, got %d", http.StatusOK, recorder.Code)

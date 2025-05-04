@@ -30,7 +30,7 @@ func New(replicas int, fn Hash) *NodeMap {
 	m := &NodeMap{
 		hasher:   fn,
 		replicas: replicas,
-		ring:     make([]uint32, 0), // REVIEW 切片也是引用类型，不需要初始化吗
+		ring:     make([]uint32, 0),
 		nodeMap:  make(map[uint32]NodeID),
 	}
 	if m.hasher == nil {

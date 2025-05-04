@@ -10,7 +10,7 @@ import (
 	"net/http"
 )
 
-var db = map[string]string{
+var mockDB = map[string]string{
 	"Tom":  "630",
 	"Jack": "589",
 	"Sam":  "567",
@@ -20,7 +20,7 @@ func createGroup() *geecache.Group {
 	return geecache.NewGroup("scores", 2<<10, geecache.GetterFunc(
 		func(key string) ([]byte, error) {
 			log.Printf("[SlowDB] search key: %v", key)
-			if v, ok := db[key]; ok {
+			if v, ok := mockDB[key]; ok {
 				return []byte(v), nil
 			}
 			return nil, fmt.Errorf("%s does not exist", key)
@@ -29,11 +29,11 @@ func createGroup() *geecache.Group {
 
 // 来启动缓存服务器：创建 HTTPPool，添加节点信息，注册到 group 中，启动 HTTP 服务（共3个端口，8001/8002/8003），用户不感知。
 func startCacheServer(addr string, addrs []consistenthash.NodeID, gee *geecache.Group) {
-	peer := network.NewHTTPPool(addr)
-	peer.AddPeers(addrs...)
-	gee.RegisterPeerPicker(peer)
+	cacheServer := network.NewCacheServer(addr)
+	cacheServer.AddPeers(addrs...)
+	gee.RegisterPeerPicker(cacheServer)
 	log.Println("geecache is running at", addr)
-	log.Fatal(http.ListenAndServe(addr[7:], peer))
+	log.Fatal(http.ListenAndServe(addr[7:], cacheServer))
 }
 
 // 用来启动一个 API 服务（端口 9999），与用户进行交互，用户感知
@@ -61,6 +61,7 @@ func main() {
 	flag.Parse()
 
 	apiAddr := "http://localhost:9999"
+	// 3个缓存服务器
 	addrMap := map[int]string{
 		8001: "http://localhost:8001",
 		8002: "http://localhost:8002",
@@ -71,7 +72,7 @@ func main() {
 	for _, v := range addrMap {
 		addrs = append(addrs, consistenthash.NodeID(v))
 	}
-
+	// 创建缓存服务器中的db
 	group := createGroup()
 	if api {
 		go startAPIServer(apiAddr, group)

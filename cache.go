@@ -8,7 +8,7 @@ import (
 
 type Cache struct {
 	mtx        sync.Mutex
-	lru        *lru.LRUCache
+	lru        *lru.Cache
 	cacheBytes int64
 }
 

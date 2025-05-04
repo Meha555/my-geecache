@@ -21,11 +21,12 @@ const (
 	defaultReplicas = 50
 )
 
-// HTTPPool，作为承载节点间 HTTP 通信的核心数据结构
-type HTTPPool struct {
+// CacheServer，作为承载节点间 HTTP 通信的核心数据结构
+type CacheServer struct {
 	sync.RWMutex
-	// this peer's base URL, e.g. "https://example.net:8000"
-	selfURL  string
+	// 当前节点的自身地址, e.g. "https://example.net:8000"
+	selfURL string
+	// 当前节点的API前缀
 	basePath string
 
 	// 一致性哈希根据具体的 key 选择节点来实现负载均衡
@@ -34,8 +35,8 @@ type HTTPPool struct {
 	getters map[consistenthash.NodeID]*httpGetter
 }
 
-func NewHTTPPool(addr string) *HTTPPool {
-	return &HTTPPool{
+func NewCacheServer(addr string) *CacheServer {
+	return &CacheServer{
 		selfURL:  addr,
 		basePath: defaultBasePath,
 		peers:    consistenthash.New(defaultReplicas, nil),
@@ -43,12 +44,12 @@ func NewHTTPPool(addr string) *HTTPPool {
 	}
 }
 
-// ServeHTTP 负责处理所有HTTP请求 /<basepath>/<groupname>/<key>
-func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+// ServeHTTP 负责处理所有HTTP请求 selfURL/<basepath>/<groupname>/<key>
+func (p *CacheServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.URL.Path, p.basePath) {
 		panic("HTTPPool serving unexpected path: " + r.URL.Path)
 	}
-	p.Log("%s : %s", r.Method, r.URL.Path)
+	log.Printf("[Server %s] %s : %s", p.selfURL, r.Method, r.URL.Path)
 	parts := strings.SplitN(r.URL.Path[len(p.basePath):], "/", 2)
 	if len(parts) < 2 {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -72,14 +73,19 @@ func (p *HTTPPool) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream") // 表明是二进制流
 	// 用 protobuf 的目的非常简单，为了获得更高的性能。传输前使用 protobuf 编码，接收方再进行解码，可以显著地降低二进制传输的大小。另外一方面，protobuf 可非常适合传输结构化数据，便于通信字段的扩展。
 	body, err := proto.Marshal(&pb.Response{Value: value.ByteSlice()})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Write(body) // 这里可以用 w.Write(view.b) 代替，写入 http body 不会影响 cache 的值
 }
 
-func (p *HTTPPool) AddPeers(peers ...consistenthash.NodeID) {
+// AddPeers 添加一个对端节点到本地节点注册表
+func (p *CacheServer) AddPeers(peers ...consistenthash.NodeID) {
 	p.Lock()
 	defer p.Unlock()
 	for _, peer := range peers {
-		url, err := url.JoinPath(string(peer), defaultBasePath)
+		url, err := url.JoinPath(string(peer), p.basePath)
 		if err != nil {
 			panic(err)
 		}
@@ -88,7 +94,8 @@ func (p *HTTPPool) AddPeers(peers ...consistenthash.NodeID) {
 	}
 }
 
-func (p *HTTPPool) DelPeeker(peer consistenthash.NodeID) {
+// DelPeeker 从本地节点注册表中删除一个对端节点
+func (p *CacheServer) DelPeeker(peer consistenthash.NodeID) {
 	p.Lock()
 	defer p.Unlock()
 	if _, ok := p.getters[peer]; ok {
@@ -97,19 +104,17 @@ func (p *HTTPPool) DelPeeker(peer consistenthash.NodeID) {
 	}
 }
 
-func (p *HTTPPool) PickPeer(key string) geecache.PeerGetter {
+func (p *CacheServer) PickPeer(key string) geecache.PeerGetter {
 	p.RLock()
 	defer p.RUnlock()
 	nodeId := p.peers.GetNode(key)
+	// 不要选到自己了,否则会自己请求自己导致无限递归
+	// 哈希到自己也说明了这个key确实缓存未命中，因为能走到PickPeer就是本地缓存未命中
 	if nodeId != consistenthash.NodeID(p.selfURL) {
-		log.Printf("Pick peer %v", nodeId)
+		log.Printf("[Server %s] Pick peer %v", p.selfURL, nodeId)
 		return p.getters[nodeId]
 	}
 	return nil
-}
-
-func (p *HTTPPool) Log(format string, v ...interface{}) {
-	log.Printf("[Server %s] %s", p.selfURL, fmt.Sprintf(format, v...))
 }
 
 type httpGetter struct {

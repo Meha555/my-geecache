@@ -5,10 +5,13 @@ import (
 	pb "geecache/proto"
 	"geecache/singleflight"
 	"geecache/util"
+	"log"
 	"sync"
 )
 
+// Group 相当于redis里的db。
 type Group struct {
+	// db名称
 	name string
 	// 直接从数据源取数据，不走缓存
 	srcGetter Getter
@@ -26,15 +29,15 @@ var (
 	groups = make(map[string]*Group)
 )
 
-func NewGroup(name string, cacheBytes int64, getter Getter) *Group {
-	if getter == nil {
+func NewGroup(name string, cacheBytes int64, srcGetter Getter) *Group {
+	if srcGetter == nil {
 		panic("nil Getter")
 	}
 	g := &Group{
 		name:       name,
-		srcGetter:  getter,
+		srcGetter:  srcGetter,
 		localCache: &Cache{cacheBytes: cacheBytes},
-		loader:     &singleflight.Batch{},
+		loader:     singleflight.NewBatch(),
 	}
 	mtx.Lock()
 	defer mtx.Unlock()
@@ -58,28 +61,31 @@ func (g *Group) RegisterPeerPicker(picker PeerPicker) {
 	g.peerPicker = picker
 }
 
-func (g *Group) Get(key string) (value util.ByteView, err error) {
+func (g *Group) Get(key string) (util.ByteView, error) {
 	// 先从本地缓存中取值
 	if val, ok := g.localCache.Get(key); ok {
+		log.Printf("%s 命中本地缓存!", key)
 		return val, nil
 	}
 	// 本地缓存未命中，继续尝试远程缓存
 	// each key is only fetched once (either locally 打到数据库 or remotely 打到对端)
 	// regardless of the number of concurrent callers.
-	// 这个 CallOnce 只有在缓存没有命中的时候才会执行，并不会影响缓存的本身的性能，缓存没命中的时候必然要等待获取数据，要么等上游返回，要么等锁。
-	val, err := g.loader.CallOnce(key, func() (interface{}, error) {
+	// 这个 CallOnce 只有在缓存没有命中的时候才会执行，并不会影响缓存的本身的性能，缓存没命中的时候必然要等待获取数据，要么等其他节点返回，要么等锁。
+	val, err := g.loader.Call(key, func() (interface{}, error) {
 		if g.peerPicker != nil {
 			if val, err := g.getFromPeer(key); err == nil {
+				log.Printf("%s 命中远程缓存!", key)
 				return val, nil
 			}
 		}
+		log.Printf("%s 未命中任何缓存,直接读数据源!", key)
 		// 远程缓存也没命中，则直接从数据源取
 		return g.getFromSouce(key)
 	})
 	if err == nil {
 		return val.(util.ByteView), err
 	}
-	return
+	return util.ByteView{}, err
 }
 
 func (g *Group) getFromSouce(key string) (util.ByteView, error) {
